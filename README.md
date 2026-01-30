@@ -5,11 +5,12 @@ A customizable status line for Claude Code showing real-time session information
 ## Screenshot
 
 ```
-~/cc/statusline | [Opus 4.5] Context: 43% (87k/112k) | $0.15 | 5h: 34% → 3h5m | 7d: 5% → 5d6h | main*
+My Session | ~/cc/statusline | [Opus 4.5] Context: 43% (87k/112k) | $0.15 | 5h: 34% → 3h5m | 7d: 5% → 5d6h | main*
 ```
 
 ## Features
 
+- **Session name** - Custom session title (if set via `/title`)
 - **Current directory** - Full path with `~` substitution for home directory
 - **Model name** - Currently active Claude model
 - **Mode indicator** - Shows when in plan/edit mode
@@ -85,6 +86,7 @@ API usage data is cached in `/tmp/claude-usage-cache` for 5 minutes to avoid rat
 Edit the script to customize:
 
 - `CACHE_MAX_AGE` - How long to cache API data (default: 300 seconds)
+- `CONTEXT_OVERHEAD` - Fudge factor for context tokens (default: 12000). The API's usage object doesn't include all context overhead (system prompt structure, tool formatting, special tokens). Adjust this if you add/remove MCP servers or custom agents to better match `/context` output.
 - Color codes in the "ANSI Color Codes" section
 - Output format in the "Final Output" section
 

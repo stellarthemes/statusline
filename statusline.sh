@@ -26,6 +26,30 @@ CWD=$(echo "$input" | jq -r '.cwd // empty')
 DIR_NAME="${CWD/#$HOME/\~}"
 
 # ==============================================================================
+# Session Name (custom title if set)
+# ==============================================================================
+SESSION_ID=$(echo "$input" | jq -r '.session_id // empty')
+PROJECT_DIR=$(echo "$input" | jq -r '.workspace.project_dir // empty')
+SESSION_NAME=""
+
+if [ -n "$SESSION_ID" ] && [ -n "$PROJECT_DIR" ]; then
+    # Convert project path to Claude's escaped format (/ becomes -)
+    ESCAPED_PROJECT_DIR=$(echo "$PROJECT_DIR" | sed 's|^/|-|; s|/|-|g')
+    SESSIONS_INDEX="$HOME/.claude/projects/${ESCAPED_PROJECT_DIR}/sessions-index.json"
+    SESSION_JSONL="$HOME/.claude/projects/${ESCAPED_PROJECT_DIR}/${SESSION_ID}.jsonl"
+
+    # Try sessions-index.json first
+    if [ -f "$SESSIONS_INDEX" ]; then
+        SESSION_NAME=$(jq -r --arg sid "$SESSION_ID" '.entries[] | select(.sessionId == $sid) | .customTitle // empty' "$SESSIONS_INDEX" 2>/dev/null)
+    fi
+
+    # Fallback: read from session transcript (for freshly renamed sessions)
+    if [ -z "$SESSION_NAME" ] && [ -f "$SESSION_JSONL" ]; then
+        SESSION_NAME=$(grep '"type":"custom-title"' "$SESSION_JSONL" 2>/dev/null | tail -1 | jq -r '.customTitle // empty' 2>/dev/null)
+    fi
+fi
+
+# ==============================================================================
 # Session Cost (theoretical - flat rate plan)
 # ==============================================================================
 COST=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
@@ -172,13 +196,20 @@ fi
 # ==============================================================================
 # Calculate percentage of context window used
 # Try multiple sources: current_usage, total tokens, or parse transcript
+#
+# FUDGE FACTOR: The API's usage object doesn't include all context overhead
+# (system prompt structure, tool definitions formatting, special tokens, etc.)
+# This approximates the gap between API-reported tokens and /context's accounting.
+# Adjust if you add/remove MCP servers or custom agents.
+CONTEXT_OVERHEAD=12000
 CONTEXT_SIZE=$(echo "$input" | jq -r '.context_window.context_window_size // 200000')
 USAGE=$(echo "$input" | jq '.context_window.current_usage // null')
 TRANSCRIPT_PATH=$(echo "$input" | jq -r '.transcript_path // empty')
 
 # Try to get token count from current_usage first
 if [ "$USAGE" != "null" ] && [ "$USAGE" != "{}" ]; then
-    CURRENT=$(echo "$USAGE" | jq '.input_tokens + .cache_creation_input_tokens + .cache_read_input_tokens')
+    # Include output_tokens as they also consume context space
+    CURRENT=$(echo "$USAGE" | jq '.input_tokens + .cache_creation_input_tokens + .cache_read_input_tokens + .output_tokens')
 else
     # Fall back to total_input_tokens + total_output_tokens
     TOTAL_IN=$(echo "$input" | jq -r '.context_window.total_input_tokens // 0')
@@ -194,11 +225,14 @@ if [ "$CURRENT" -eq 0 ] 2>/dev/null && [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANS
         INPUT_T=$(echo "$LAST_USAGE" | jq -r '.input_tokens // 0')
         CACHE_CREATE=$(echo "$LAST_USAGE" | jq -r '.cache_creation_input_tokens // 0')
         CACHE_READ=$(echo "$LAST_USAGE" | jq -r '.cache_read_input_tokens // 0')
-        CURRENT=$((INPUT_T + CACHE_CREATE + CACHE_READ))
+        OUTPUT_T=$(echo "$LAST_USAGE" | jq -r '.output_tokens // 0')
+        CURRENT=$((INPUT_T + CACHE_CREATE + CACHE_READ + OUTPUT_T))
     fi
 fi
 
 if [ "$CURRENT" -gt 0 ] 2>/dev/null; then
+    # Add overhead to approximate /context's accounting
+    CURRENT=$((CURRENT + CONTEXT_OVERHEAD))
     PERCENT=$((CURRENT * 100 / CONTEXT_SIZE))
     TOKENS_USED=$CURRENT
     TOKENS_LEFT=$((CONTEXT_SIZE - CURRENT))
@@ -298,12 +332,13 @@ fi
 # Git Branch and Status Detection
 # ==============================================================================
 # Shows current git branch and dirty indicator if in a git repository
+# Uses -C to specify directory and --no-optional-locks to prevent lock files
 GIT_DISPLAY=""
-if git rev-parse --git-dir > /dev/null 2>&1; then
-    BRANCH=$(git branch --show-current 2>/dev/null)
+if git -C "$CWD" rev-parse --git-dir > /dev/null 2>&1; then
+    BRANCH=$(git -C "$CWD" --no-optional-locks branch --show-current 2>/dev/null)
     if [ -n "$BRANCH" ]; then
         # Check for uncommitted changes
-        if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+        if [ -n "$(git -C "$CWD" --no-optional-locks status --porcelain 2>/dev/null)" ]; then
             DIRTY="${RED}*${RESET}"
         else
             DIRTY=""
@@ -316,5 +351,8 @@ fi
 # Final Output
 # ==============================================================================
 # Assemble all components into final statusline
-# Format: dir | [Model] | mode | Context: XX% (usedK/leftK) | cost | 5h: XX% → Xh | 7d: XX% → Xd | branch*
-echo -e "${CYAN}${DIR_NAME}${RESET} | [${MODEL}]${MODE_DISPLAY} ${WHITE}Context:${RESET} ${CTX_COLOR}${PERCENT}%${RESET} (${TOKENS_USED_FMT}/${TOKENS_LEFT_FMT}) | ${GREEN}${COST_DISPLAY}${RESET}${LIMITS_DISPLAY}${GIT_DISPLAY}"
+# Format: [session] dir | [Model] | mode | Context: XX% (usedK/leftK) | cost | 5h: XX% → Xh | 7d: XX% → Xd | branch*
+SESSION_DISPLAY=""
+[ -n "$SESSION_NAME" ] && SESSION_DISPLAY="${MAGENTA}${SESSION_NAME}${RESET} | "
+
+echo -e "${SESSION_DISPLAY}${CYAN}${DIR_NAME}${RESET} | [${MODEL}]${MODE_DISPLAY} ${WHITE}Context:${RESET} ${CTX_COLOR}${PERCENT}%${RESET} (${TOKENS_USED_FMT}/${TOKENS_LEFT_FMT}) | ${GREEN}${COST_DISPLAY}${RESET}${LIMITS_DISPLAY}${GIT_DISPLAY}"
