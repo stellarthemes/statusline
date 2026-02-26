@@ -37,10 +37,10 @@ Usage percentages are color-coded:
 
 ## Installation
 
-1. Copy the script to your Claude scripts directory:
+1. Download the script to your Claude scripts directory:
    ```bash
    mkdir -p ~/.claude/scripts
-   cp statusline.sh ~/.claude/scripts/
+   curl -fsSL https://raw.githubusercontent.com/stellarthemes/statusline/main/statusline.sh -o ~/.claude/scripts/statusline.sh
    chmod 755 ~/.claude/scripts/statusline.sh
    ```
 
